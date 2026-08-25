@@ -181,68 +181,93 @@ function init() {
     });
   }
 
-  // --- Load the robot ------------------------------------------------------
+  function disposeRobot() {
+    if (!robotRoot) return;
+    robotRoot.traverse((child) => {
+      if (!child.isMesh) return;
+      child.geometry?.dispose();
+      child.material?.dispose();
+    });
+    scene.remove(robotRoot);
+    robotRoot = null;
+    state.mixer = null;
+    state.actions = [];
+  }
+
+  // Applies the yellow-metal material pass, normalizes scale/position and
+  // wires up the animation mixer — used both for the bundled model and for
+  // any FBX the user imports themselves via the file picker.
+  function mountRobot(fbx) {
+    disposeRobot();
+    robotRoot = fbx;
+
+    fbx.traverse((child) => {
+      if (!child.isMesh) return;
+      child.castShadow = true;
+      child.receiveShadow = true;
+
+      const original = Array.isArray(child.material) ? child.material[0] : child.material;
+      const origColor = original && original.color ? original.color : new THREE.Color(1, 1, 1);
+      const luminance = origColor.r * 0.299 + origColor.g * 0.587 + origColor.b * 0.114;
+      const isDark = luminance < 0.25;
+
+      child.userData.isRobotSurface = true;
+      child.userData.isDark = isDark;
+
+      child.material = new THREE.MeshPhysicalMaterial({
+        color: isDark ? ROBOT_PARAMS.darkColor : ROBOT_PARAMS.yellowColor,
+        roughness: isDark ? ROBOT_PARAMS.roughness + 0.15 : ROBOT_PARAMS.roughness,
+        metalness: ROBOT_PARAMS.metalness,
+        clearcoat: ROBOT_PARAMS.clearcoat,
+        clearcoatRoughness: 0.15,
+        envMapIntensity: ROBOT_PARAMS.envMapIntensity,
+      });
+    });
+
+    // Normalize scale/position: fit the arm to a consistent size and
+    // rest it on the ground plane, centered on the turntable.
+    const box = new THREE.Box3().setFromObject(fbx);
+    const size = new THREE.Vector3();
+    box.getSize(size);
+
+    const maxDim = Math.max(size.x, size.y, size.z);
+    const scale = maxDim > 0 ? 6 / maxDim : 1;
+    fbx.scale.setScalar(scale);
+
+    const scaledBox = new THREE.Box3().setFromObject(fbx);
+    fbx.position.x -= (scaledBox.min.x + scaledBox.max.x) / 2;
+    fbx.position.z -= (scaledBox.min.z + scaledBox.max.z) / 2;
+    fbx.position.y -= scaledBox.min.y;
+
+    scene.add(fbx);
+
+    if (fbx.animations && fbx.animations.length > 0) {
+      state.mixer = new THREE.AnimationMixer(fbx);
+      state.actions = fbx.animations.map((clip) => state.mixer.clipAction(clip));
+      state.actions.forEach((action) => {
+        action.setLoop(THREE.LoopRepeat);
+        action.play();
+      });
+    }
+
+    loadingScreen.classList.add('hidden');
+  }
+
+  // --- Load the bundled robot ----------------------------------------------
   const loadingScreen = document.getElementById('loading-screen');
   const loadingText = document.getElementById('loading-text');
   const loader = new FBXLoader();
 
+  const stallTimeout = setTimeout(() => {
+    loadingText.textContent =
+      'Esto está tardando más de lo normal — revisa la consola (F12) o prueba a importar tu propio .fbx arriba.';
+  }, 12000);
+
   loader.load(
     MODEL_URL,
     (fbx) => {
-      robotRoot = fbx;
-
-      fbx.traverse((child) => {
-        if (!child.isMesh) return;
-        child.castShadow = true;
-        child.receiveShadow = true;
-
-        const original = Array.isArray(child.material) ? child.material[0] : child.material;
-        const origColor = original && original.color ? original.color : new THREE.Color(1, 1, 1);
-        const luminance = origColor.r * 0.299 + origColor.g * 0.587 + origColor.b * 0.114;
-        const isDark = luminance < 0.25;
-
-        child.userData.isRobotSurface = true;
-        child.userData.isDark = isDark;
-
-        child.material = new THREE.MeshPhysicalMaterial({
-          color: isDark ? ROBOT_PARAMS.darkColor : ROBOT_PARAMS.yellowColor,
-          roughness: isDark ? ROBOT_PARAMS.roughness + 0.15 : ROBOT_PARAMS.roughness,
-          metalness: ROBOT_PARAMS.metalness,
-          clearcoat: ROBOT_PARAMS.clearcoat,
-          clearcoatRoughness: 0.15,
-          envMapIntensity: ROBOT_PARAMS.envMapIntensity,
-        });
-      });
-
-      // Normalize scale/position: fit the arm to a consistent size and
-      // rest it on the ground plane, centered on the turntable.
-      const box = new THREE.Box3().setFromObject(fbx);
-      const size = new THREE.Vector3();
-      box.getSize(size);
-      const center = new THREE.Vector3();
-      box.getCenter(center);
-
-      const maxDim = Math.max(size.x, size.y, size.z);
-      const scale = 6 / maxDim;
-      fbx.scale.setScalar(scale);
-
-      const scaledBox = new THREE.Box3().setFromObject(fbx);
-      fbx.position.x -= (scaledBox.min.x + scaledBox.max.x) / 2;
-      fbx.position.z -= (scaledBox.min.z + scaledBox.max.z) / 2;
-      fbx.position.y -= scaledBox.min.y;
-
-      scene.add(fbx);
-
-      if (fbx.animations && fbx.animations.length > 0) {
-        state.mixer = new THREE.AnimationMixer(fbx);
-        state.actions = fbx.animations.map((clip) => state.mixer.clipAction(clip));
-        state.actions.forEach((action) => {
-          action.setLoop(THREE.LoopRepeat);
-          action.play();
-        });
-      }
-
-      loadingScreen.classList.add('hidden');
+      clearTimeout(stallTimeout);
+      mountRobot(fbx);
     },
     (progress) => {
       if (progress.total) {
@@ -251,10 +276,39 @@ function init() {
       }
     },
     (error) => {
+      clearTimeout(stallTimeout);
       console.error('Error cargando el FBX:', error);
-      loadingText.textContent = 'Error al cargar el modelo. Revisa la consola.';
+      loadingText.textContent = 'Error al cargar el modelo. Prueba a importar tu propio .fbx arriba.';
     }
   );
+
+  // --- Importar un FBX local (bypasa el fetch del modelo empaquetado,
+  // útil para probar si un modelo distinto/re-exportado carga mejor) --------
+  const fileInput = document.getElementById('model-file-input');
+  fileInput?.addEventListener('change', (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    loadingText.textContent = `Leyendo ${file.name}…`;
+    loadingScreen.classList.remove('hidden');
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const fbx = new FBXLoader().parse(reader.result, '');
+        mountRobot(fbx);
+      } catch (err) {
+        console.error('Error al parsear el FBX importado:', err);
+        loadingText.textContent = 'No se pudo leer ese archivo como FBX. Revisa la consola.';
+      }
+    };
+    reader.onerror = () => {
+      console.error('Error leyendo el archivo:', reader.error);
+      loadingText.textContent = 'Error leyendo el archivo local.';
+    };
+    reader.readAsArrayBuffer(file);
+    fileInput.value = '';
+  });
 
   window.addEventListener('resize', () => onResize(camera, renderer, composer, target));
 
