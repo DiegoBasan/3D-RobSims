@@ -4,7 +4,24 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>RobSims · Brazo Robótico 3D Isométrico</title>
-    <link rel="stylesheet" href="/src/style.css" />
+    <link rel="stylesheet" href="src/style.css" />
+
+    <!--
+      Sin build step: three.js, sus addons y lil-gui están vendorizados en
+      vendor/ y se resuelven vía import map, tal cual los sirve un navegador
+      moderno. Esto es HTML/JS estático puro — abre esta carpeta con
+      cualquier servidor estático (o GitHub Pages "Deploy from a branch")
+      y funciona sin compilar nada.
+    -->
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "./vendor/three/three.module.js",
+          "three/addons/": "./vendor/three/examples/jsm/",
+          "lil-gui": "./vendor/lil-gui/lil-gui.esm.js"
+        }
+      }
+    </script>
   </head>
   <body>
     <div id="app">
@@ -27,6 +44,6 @@
       </footer>
     </div>
 
-    <script type="module" src="/src/main.js"></script>
+    <script type="module" src="src/main.js"></script>
   </body>
 </html>

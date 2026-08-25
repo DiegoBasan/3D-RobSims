@@ -2,38 +2,35 @@
 
 Visor 3D web de un brazo robótico industrial (modelo `Roboarm_lowpoly.fbx`), en **vista isométrica**, con su **animación** original reproduciéndose en loop y un material **amarillo metalizado de baja rugosidad** (estilo industrial tipo KUKA) para lograr reflejos marcados, cercanos al look "render" de la imagen de referencia.
 
-Construido con **Three.js + Vite**, sin backend: todo corre en el navegador.
+**HTML/JS estático puro — sin build step.** Three.js, sus addons (loaders, controles, post-procesado) y `lil-gui` están vendorizados dentro de `vendor/` y se resuelven en el navegador vía [import map](https://developer.mozilla.org/en-US/docs/Web/HTML/Element/script/type/importmap) nativo. No hay bundler, no hay `npm run build`, no hay `node_modules` en producción: es la carpeta tal cual, servida por cualquier servidor estático.
 
-## Cómo correrlo
+## Cómo correrlo en local
+
+Cualquier servidor estático sirve (los módulos ES + `fetch` del FBX necesitan `http://`, no funciona abriendo el `index.html` con `file://`):
 
 ```bash
-npm install
 npm run dev
+# o, sin npm:
+python3 -m http.server 5173
 ```
 
-Abre la URL que imprime Vite (por defecto `http://localhost:5173`).
-
-Para generar una build estática de producción:
-
-```bash
-npm run build
-npm run preview
-```
+Abre `http://localhost:5173`.
 
 ## Despliegue en GitHub Pages
 
-El repo incluye `.github/workflows/deploy-pages.yml`, que compila el proyecto (`npm run build`) y publica `dist/` en GitHub Pages automáticamente en cada push a `main`.
+No hace falta ningún workflow de GitHub Actions. En **Settings → Pages**, configura:
 
-**Importante:** GitHub Pages sirve el `index.html` de la raíz del repo tal cual si no le dices lo contrario, y ese `index.html` es solo el *código fuente* (usa `import` de módulos bare como `three`, que el navegador no puede resolver sin un bundler) — por eso, si abres la página y se queda pegada en "Cargando modelo 3D…", es porque está sirviendo el repo crudo en vez del build. Para que funcione:
+- **Source:** `Deploy from a branch`
+- **Branch:** `main` / `(root)`
 
-1. Ve a **Settings → Pages** en GitHub.
-2. En **Source**, selecciona **GitHub Actions** (no "Deploy from a branch").
-3. Con eso el workflow se encarga de compilar y publicar el `dist/` correcto en cada push a `main`.
+GitHub sirve la carpeta tal cual — como no depende de ningún paso de compilación, el `index.html` de la raíz **es** el sitio final.
+
+> Si en algún momento ves una página en blanco pegada en "Cargando modelo 3D…", casi seguro es porque algo (un workflow de Pages, un proxy, etc.) está sirviendo el repo desde una ruta distinta a la raíz, o bloqueando `vendor/` o `models/`. Revisa la consola del navegador: los imports vía import map fallan con un error explícito de módulo no encontrado.
 
 ## Qué incluye
 
 - **Cámara ortográfica isométrica real** (~35.264° de elevación / 45° de azimut), con `OrbitControls` limitado para poder inspeccionar el modelo sin salir del feel isométrico, más zoom con scroll.
-- **Carga del FBX** (`public/models/roboarm_lowpoly.fbx`) vía `FBXLoader`, con auto-centrado, auto-escalado y apoyo sobre el piso.
+- **Carga del FBX** (`models/roboarm_lowpoly.fbx`) vía `FBXLoader`, con auto-centrado, auto-escalado y apoyo sobre el piso.
 - **Animación** del clip embebido en el FBX reproducida con `AnimationMixer` (play/pausa y velocidad ajustables desde el panel de control).
 - **Material PBR** (`MeshPhysicalMaterial`): amarillo `#f5c400`, `metalness: 1`, `roughness` bajo + `clearcoat`, para simular pintura metalizada industrial. Las piezas oscuras originales (juntas, cableado) se detectan por luminancia y se mantienen en un metal oscuro, imitando el contraste típico de un brazo robótico real.
 - **Iluminación + IBL**: un environment map generado con `RoomEnvironment` + `PMREMGenerator` da reflejos de estudio realistas sobre el metal, combinado con luz direccional principal (con sombras suaves PCFSoft), luz de relleno y rim light.
@@ -42,18 +39,20 @@ El repo incluye `.github/workflows/deploy-pages.yml`, que compila el proyecto (`
 
 ## Sobre el look "RTX en la web"
 
-Ray tracing en tiempo real de verdad (path tracing con rebotes de luz reales) no es viable en un navegador para una malla **animada/esqueletal** a buen framerate — herramientas como path tracers de Three.js (WebGL/WebGPU) rebuilding la BVH cada frame para geometría deformable son demasiado costosas para 60 fps.
+Ray tracing en tiempo real de verdad (path tracing con rebotes de luz reales) no es viable en un navegador para una malla **animada/esqueletal** a buen framerate — reconstruir la estructura de aceleración cada frame para geometría deformable es demasiado costoso para 60 fps.
 
-En su lugar, este proyecto usa el enfoque que en producción se usa para lograr "look RTX" en tiempo real sin path tracing completo: **PBR físicamente correcto + Image-Based Lighting (IBL) + post-procesado**, que es la misma base que usan los motores de videojuegos con reflejos "casi ray-traced" cuando no pueden pagar el costo de RT completo. Si más adelante quieres dar el salto a ray tracing real, la vía sería congelar la pose (sin animación activa) y renderizar esa pose puntual con un path tracer como `three-gpu-pathtracer`.
+En su lugar, este proyecto usa el enfoque que en producción se usa para lograr "look RTX" en tiempo real sin path tracing completo: **PBR físicamente correcto + Image-Based Lighting (IBL) + post-procesado**, la misma base que usan los motores de videojuegos con reflejos "casi ray-traced" cuando no pueden pagar el costo de RT completo. Si más adelante quieres dar el salto a ray tracing real, la vía sería congelar la pose (sin animación activa) y renderizar esa pose puntual con un path tracer como `three-gpu-pathtracer`.
 
 ## Estructura
 
 ```
-├── index.html
+├── index.html          # import map + montaje de la página
 ├── src/
-│   ├── main.js       # escena, cámara isométrica, luces, material, animación, post-fx, GUI
+│   ├── main.js          # escena, cámara isométrica, luces, material, animación, post-fx, GUI
 │   └── style.css
-└── public/
-    └── models/
-        └── roboarm_lowpoly.fbx
+├── models/
+│   └── roboarm_lowpoly.fbx
+└── vendor/               # three.js (core + addons usados) y lil-gui, vendorizados
+    ├── three/
+    └── lil-gui/
 ```
