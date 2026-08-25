@@ -20,6 +20,16 @@ npm run build
 npm run preview
 ```
 
+## Despliegue en GitHub Pages
+
+El repo incluye `.github/workflows/deploy-pages.yml`, que compila el proyecto (`npm run build`) y publica `dist/` en GitHub Pages automáticamente en cada push a `main`.
+
+**Importante:** GitHub Pages sirve el `index.html` de la raíz del repo tal cual si no le dices lo contrario, y ese `index.html` es solo el *código fuente* (usa `import` de módulos bare como `three`, que el navegador no puede resolver sin un bundler) — por eso, si abres la página y se queda pegada en "Cargando modelo 3D…", es porque está sirviendo el repo crudo en vez del build. Para que funcione:
+
+1. Ve a **Settings → Pages** en GitHub.
+2. En **Source**, selecciona **GitHub Actions** (no "Deploy from a branch").
+3. Con eso el workflow se encarga de compilar y publicar el `dist/` correcto en cada push a `main`.
+
 ## Qué incluye
 
 - **Cámara ortográfica isométrica real** (~35.264° de elevación / 45° de azimut), con `OrbitControls` limitado para poder inspeccionar el modelo sin salir del feel isométrico, más zoom con scroll.
