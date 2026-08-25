@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
@@ -7,9 +8,13 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { SMAAPass } from 'three/addons/postprocessing/SMAAPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { clone as cloneSkeleton } from 'three/addons/utils/SkeletonUtils.js';
 import { GUI } from 'lil-gui';
 
 const MODEL_URL = 'models/roboarm_lowpoly.fbx';
+const MAX_INSTANCES = 6;
+const INSTANCE_SPACING = 3.4;
+const SELECTION_COLOR = 0x3ea6ff;
 
 // Industrial "KUKA-style" yellow: bright, saturated, high metalness / low roughness
 // so the environment map reads back as sharp, hot reflections on the arm segments.
@@ -24,8 +29,6 @@ const ROBOT_PARAMS = {
 };
 
 const state = {
-  mixer: null,
-  actions: [],
   clock: new THREE.Clock(),
   autoRotate: false,
   playing: true,
@@ -37,22 +40,29 @@ init();
 function init() {
   const canvas = document.getElementById('scene-canvas');
 
+  // antialias:false on purpose — SMAAPass below already resolves edges, so
+  // running MSAA *and* SMAA at once would pay for anti-aliasing twice.
   const renderer = new THREE.WebGLRenderer({
     canvas,
-    antialias: true,
+    antialias: false,
     powerPreference: 'high-performance',
   });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  // Capping at 1.5x instead of the full devicePixelRatio is the single
+  // biggest win for smoothness on high-DPI screens (2x DPR = 4x the pixels
+  // for every pass: PBR shading, shadows, bloom, SMAA).
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.0;
+  renderer.toneMappingExposure = 1.05;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
 
+  // --- Warm, light studio backdrop (instead of the dark void) -------------
+  const BG_COLOR = 0xe9dcc3;
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x0a0c10);
-  scene.fog = new THREE.Fog(0x0a0c10, 18, 40);
+  scene.background = new THREE.Color(BG_COLOR);
+  scene.fog = new THREE.Fog(BG_COLOR, 20, 42);
 
   // --- Image-based lighting: a soft studio room environment gives the
   // metallic PBR material real reflections/highlights instead of flat shading.
@@ -76,52 +86,54 @@ function init() {
   controls.target.copy(target);
   controls.enableDamping = true;
   controls.dampingFactor = 0.08;
-  controls.minZoom = 0.4;
+  controls.minZoom = 0.3;
   controls.maxZoom = 3.2;
   controls.minPolarAngle = THREE.MathUtils.degToRad(20);
   controls.maxPolarAngle = THREE.MathUtils.degToRad(75);
-  controls.enablePan = false;
+  controls.enablePan = true;
   controls.update();
 
-  // --- Lighting ----------------------------------------------------------
+  // --- Lighting (warm key + warm sky/ground fill) --------------------------
   const keyLight = new THREE.DirectionalLight(0xfff2d6, 2.0);
   keyLight.position.set(6, 10, 6);
   keyLight.castShadow = true;
-  keyLight.shadow.mapSize.set(2048, 2048);
+  keyLight.shadow.mapSize.set(1536, 1536);
   keyLight.shadow.camera.near = 1;
-  keyLight.shadow.camera.far = 30;
-  keyLight.shadow.camera.left = -10;
-  keyLight.shadow.camera.right = 10;
-  keyLight.shadow.camera.top = 10;
-  keyLight.shadow.camera.bottom = -10;
+  keyLight.shadow.camera.far = 34;
+  keyLight.shadow.camera.left = -14;
+  keyLight.shadow.camera.right = 14;
+  keyLight.shadow.camera.top = 14;
+  keyLight.shadow.camera.bottom = -14;
   keyLight.shadow.bias = -0.0005;
   keyLight.shadow.radius = 3;
   scene.add(keyLight);
 
-  const rimLight = new THREE.DirectionalLight(0x8fd3ff, 0.7);
+  const rimLight = new THREE.DirectionalLight(0xffe3b0, 0.6);
   rimLight.position.set(-8, 5, -6);
   scene.add(rimLight);
 
-  const fillLight = new THREE.HemisphereLight(0x445566, 0x0a0a0a, 0.6);
+  const fillLight = new THREE.HemisphereLight(0xfff3e0, 0x5b4a34, 0.8);
   scene.add(fillLight);
 
-  // --- Ground: dark glossy PBR disc that receives shadows and picks up
+  // --- Ground: warm glossy PBR disc that receives shadows and picks up
   // the environment reflection for grounded, believable contact.
   const ground = new THREE.Mesh(
-    new THREE.CircleGeometry(14, 96),
+    new THREE.CircleGeometry(20, 96),
     new THREE.MeshStandardMaterial({
-      color: 0x0c0d10,
-      roughness: 0.35,
-      metalness: 0.55,
-      envMapIntensity: 0.8,
+      color: 0xcdbe9d,
+      roughness: 0.55,
+      metalness: 0.15,
+      envMapIntensity: 0.6,
     })
   );
   ground.rotation.x = -Math.PI / 2;
   ground.receiveShadow = true;
   scene.add(ground);
 
-  const gridHelper = new THREE.GridHelper(14, 28, 0x2a2e38, 0x14161c);
+  const gridHelper = new THREE.GridHelper(20, 40, 0xb3a077, 0xc9b98e);
   gridHelper.position.y = 0.002;
+  gridHelper.material.transparent = true;
+  gridHelper.material.opacity = 0.5;
   scene.add(gridHelper);
 
   // --- Post-processing: bloom for hot metal highlights + SMAA for crisp
@@ -144,64 +156,26 @@ function init() {
   composer.addPass(smaaPass);
   composer.addPass(new OutputPass());
 
-  // --- GUI -----------------------------------------------------------------
-  const gui = new GUI({ title: 'RobSims — Controles' });
-  const matFolder = gui.addFolder('Material del brazo');
-  matFolder.addColor(ROBOT_PARAMS, 'yellowColor').name('Amarillo').onChange(applyRobotMaterials);
-  matFolder.add(ROBOT_PARAMS, 'roughness', 0, 1, 0.01).name('Rugosidad').onChange(applyRobotMaterials);
-  matFolder.add(ROBOT_PARAMS, 'metalness', 0, 1, 0.01).name('Metalicidad').onChange(applyRobotMaterials);
-  matFolder.add(ROBOT_PARAMS, 'clearcoat', 0, 1, 0.01).name('Barniz (clearcoat)').onChange(applyRobotMaterials);
-  matFolder.add(ROBOT_PARAMS, 'envMapIntensity', 0, 3, 0.05).name('Intensidad reflejo').onChange(applyRobotMaterials);
+  // --- Gizmo: move / rotate / scale whichever model is selected ------------
+  const transformControls = new TransformControls(camera, renderer.domElement);
+  transformControls.size = 0.85;
+  scene.add(transformControls.getHelper());
+  transformControls.addEventListener('dragging-changed', (event) => {
+    controls.enabled = !event.value;
+  });
 
-  const sceneFolder = gui.addFolder('Escena');
-  sceneFolder.add(renderer, 'toneMappingExposure', 0.2, 2.5, 0.01).name('Exposición');
-  sceneFolder.add(bloomPass, 'strength', 0, 2, 0.01).name('Bloom');
-  sceneFolder.add(state, 'autoRotate').name('Auto-rotar').onChange((v) => (controls.autoRotate = v));
-  controls.autoRotateSpeed = 1.6;
+  const selectionHighlight = new THREE.BoxHelper(new THREE.Object3D(), SELECTION_COLOR);
+  selectionHighlight.visible = false;
+  scene.add(selectionHighlight);
 
-  const animFolder = gui.addFolder('Animación');
-  animFolder.add(state, 'playing').name('Reproducir');
-  animFolder.add(state, 'timeScale', 0, 2, 0.05).name('Velocidad');
+  // --- Multi-instance robot management --------------------------------------
+  const instances = [];
+  const instancesById = new Map();
+  let nextInstanceId = 1;
+  let selected = null;
 
-  let robotRoot = null;
-
-  function applyRobotMaterials() {
-    if (!robotRoot) return;
-    robotRoot.traverse((child) => {
-      if (child.isMesh && child.userData.isRobotSurface) {
-        const mat = child.material;
-        mat.color.set(child.userData.isDark ? ROBOT_PARAMS.darkColor : ROBOT_PARAMS.yellowColor);
-        mat.roughness = child.userData.isDark ? Math.min(1, ROBOT_PARAMS.roughness + 0.15) : ROBOT_PARAMS.roughness;
-        mat.metalness = ROBOT_PARAMS.metalness;
-        mat.clearcoat = ROBOT_PARAMS.clearcoat;
-        mat.clearcoatRoughness = 0.15;
-        mat.envMapIntensity = ROBOT_PARAMS.envMapIntensity;
-        mat.needsUpdate = true;
-      }
-    });
-  }
-
-  function disposeRobot() {
-    if (!robotRoot) return;
-    robotRoot.traverse((child) => {
-      if (!child.isMesh) return;
-      child.geometry?.dispose();
-      child.material?.dispose();
-    });
-    scene.remove(robotRoot);
-    robotRoot = null;
-    state.mixer = null;
-    state.actions = [];
-  }
-
-  // Applies the yellow-metal material pass, normalizes scale/position and
-  // wires up the animation mixer — used both for the bundled model and for
-  // any FBX the user imports themselves via the file picker.
-  function mountRobot(fbx) {
-    disposeRobot();
-    robotRoot = fbx;
-
-    fbx.traverse((child) => {
+  function tagAndMaterializeMeshes(root) {
+    root.traverse((child) => {
       if (!child.isMesh) return;
       child.castShadow = true;
       child.receiveShadow = true;
@@ -223,37 +197,160 @@ function init() {
         envMapIntensity: ROBOT_PARAMS.envMapIntensity,
       });
     });
+  }
 
-    // Normalize scale/position: fit the arm to a consistent size and
-    // rest it on the ground plane, centered on the turntable.
-    const box = new THREE.Box3().setFromObject(fbx);
+  function normalizeAndPlace(root, offsetX) {
+    // Fit the arm to a consistent size and rest it on the ground plane,
+    // centered on its own footprint, then lay it out along X so multiple
+    // instances don't spawn on top of each other.
+    const box = new THREE.Box3().setFromObject(root);
     const size = new THREE.Vector3();
     box.getSize(size);
 
     const maxDim = Math.max(size.x, size.y, size.z);
     const scale = maxDim > 0 ? 6 / maxDim : 1;
-    fbx.scale.setScalar(scale);
+    root.scale.setScalar(scale);
 
-    const scaledBox = new THREE.Box3().setFromObject(fbx);
-    fbx.position.x -= (scaledBox.min.x + scaledBox.max.x) / 2;
-    fbx.position.z -= (scaledBox.min.z + scaledBox.max.z) / 2;
-    fbx.position.y -= scaledBox.min.y;
+    const scaledBox = new THREE.Box3().setFromObject(root);
+    root.position.x -= (scaledBox.min.x + scaledBox.max.x) / 2;
+    root.position.z -= (scaledBox.min.z + scaledBox.max.z) / 2;
+    root.position.y -= scaledBox.min.y;
+    root.position.x += offsetX;
+  }
 
-    scene.add(fbx);
+  function registerInstance(root) {
+    // A back-reference to `instance` (which itself holds `root`) would make
+    // root.userData circular, and THREE.Object3D.copy() JSON-serializes
+    // userData when cloning — so we index by a plain numeric id instead.
+    const id = nextInstanceId++;
+    const instance = { id, root, mixer: null, actions: [] };
+    root.userData.instanceId = id;
+    instancesById.set(id, instance);
 
-    if (fbx.animations && fbx.animations.length > 0) {
-      state.mixer = new THREE.AnimationMixer(fbx);
-      state.actions = fbx.animations.map((clip) => state.mixer.clipAction(clip));
-      state.actions.forEach((action) => {
+    if (root.animations && root.animations.length > 0) {
+      instance.mixer = new THREE.AnimationMixer(root);
+      instance.actions = root.animations.map((clip) => instance.mixer.clipAction(clip));
+      instance.actions.forEach((action) => {
         action.setLoop(THREE.LoopRepeat);
         action.play();
       });
     }
 
-    loadingScreen.classList.add('hidden');
+    instances.push(instance);
+    scene.add(root);
+    selectInstance(instance);
+    return instance;
   }
 
-  // --- Load the bundled robot ----------------------------------------------
+  function selectInstance(instance) {
+    selected = instance;
+    transformControls.attach(instance.root);
+    selectionHighlight.visible = true;
+  }
+
+  function deselectInstance() {
+    selected = null;
+    transformControls.detach();
+    selectionHighlight.visible = false;
+  }
+
+  function disposeInstanceObject(root) {
+    root.traverse((child) => {
+      if (!child.isMesh) return;
+      child.geometry?.dispose();
+      const mats = Array.isArray(child.material) ? child.material : [child.material];
+      mats.forEach((m) => m?.dispose());
+    });
+  }
+
+  function removeInstance(instance) {
+    const idx = instances.indexOf(instance);
+    if (idx === -1) return;
+    instances.splice(idx, 1);
+    instancesById.delete(instance.id);
+    scene.remove(instance.root);
+    disposeInstanceObject(instance.root);
+    if (selected === instance) deselectInstance();
+  }
+
+  function duplicateInstance(instance) {
+    if (instances.length >= MAX_INSTANCES) {
+      flashMessage(`Máximo ${MAX_INSTANCES} modelos a la vez (por rendimiento).`);
+      return;
+    }
+    const clonedRoot = cloneSkeleton(instance.root);
+    clonedRoot.animations = instance.root.animations;
+    clonedRoot.position.copy(instance.root.position);
+    clonedRoot.position.x += INSTANCE_SPACING;
+    registerInstance(clonedRoot);
+  }
+
+  function addModelFromFBX(fbx) {
+    if (instances.length >= MAX_INSTANCES) {
+      flashMessage(`Máximo ${MAX_INSTANCES} modelos a la vez (por rendimiento).`);
+      return;
+    }
+    tagAndMaterializeMeshes(fbx);
+    normalizeAndPlace(fbx, instances.length * INSTANCE_SPACING);
+    registerInstance(fbx);
+  }
+
+  function applyRobotMaterials() {
+    instances.forEach(({ root }) => {
+      root.traverse((child) => {
+        if (child.isMesh && child.userData.isRobotSurface) {
+          const mat = child.material;
+          mat.color.set(child.userData.isDark ? ROBOT_PARAMS.darkColor : ROBOT_PARAMS.yellowColor);
+          mat.roughness = child.userData.isDark
+            ? Math.min(1, ROBOT_PARAMS.roughness + 0.15)
+            : ROBOT_PARAMS.roughness;
+          mat.metalness = ROBOT_PARAMS.metalness;
+          mat.clearcoat = ROBOT_PARAMS.clearcoat;
+          mat.clearcoatRoughness = 0.15;
+          mat.envMapIntensity = ROBOT_PARAMS.envMapIntensity;
+          mat.needsUpdate = true;
+        }
+      });
+    });
+  }
+
+  // --- GUI -----------------------------------------------------------------
+  const gui = new GUI({ title: 'RobSims — Controles' });
+  const matFolder = gui.addFolder('Material del brazo');
+  matFolder.addColor(ROBOT_PARAMS, 'yellowColor').name('Amarillo').onChange(applyRobotMaterials);
+  matFolder.add(ROBOT_PARAMS, 'roughness', 0, 1, 0.01).name('Rugosidad').onChange(applyRobotMaterials);
+  matFolder.add(ROBOT_PARAMS, 'metalness', 0, 1, 0.01).name('Metalicidad').onChange(applyRobotMaterials);
+  matFolder.add(ROBOT_PARAMS, 'clearcoat', 0, 1, 0.01).name('Barniz (clearcoat)').onChange(applyRobotMaterials);
+  matFolder.add(ROBOT_PARAMS, 'envMapIntensity', 0, 3, 0.05).name('Intensidad reflejo').onChange(applyRobotMaterials);
+
+  const sceneFolder = gui.addFolder('Escena');
+  sceneFolder.add(renderer, 'toneMappingExposure', 0.2, 2.5, 0.01).name('Exposición');
+  sceneFolder.add(bloomPass, 'strength', 0, 2, 0.01).name('Bloom');
+  sceneFolder.add(state, 'autoRotate').name('Auto-rotar').onChange((v) => (controls.autoRotate = v));
+  controls.autoRotateSpeed = 1.6;
+
+  const animFolder = gui.addFolder('Animación');
+  animFolder.add(state, 'playing').name('Reproducir');
+  animFolder.add(state, 'timeScale', 0, 2, 0.05).name('Velocidad');
+
+  const gizmoState = { mode: 'translate' };
+  const modelsFolder = gui.addFolder('Modelos (clic para seleccionar)');
+  const modeController = modelsFolder
+    .add(gizmoState, 'mode', { 'Mover (G)': 'translate', 'Rotar (R)': 'rotate', 'Escalar (S)': 'scale' })
+    .name('Modo gizmo')
+    .onChange((mode) => transformControls.setMode(mode));
+  modelsFolder.add({ fn: () => selected && duplicateInstance(selected) }, 'fn').name('Duplicar seleccionado');
+  modelsFolder
+    .add({ fn: () => selected && removeInstance(selected) }, 'fn')
+    .name('Eliminar seleccionado (Supr)');
+
+  function setGizmoMode(mode) {
+    gizmoState.mode = mode;
+    transformControls.setMode(mode);
+    modeController.updateDisplay();
+  }
+
+  // --- Load the bundled robot as the first instance -------------------------
   const loadingScreen = document.getElementById('loading-screen');
   const loadingText = document.getElementById('loading-text');
   const loader = new FBXLoader();
@@ -267,7 +364,10 @@ function init() {
     MODEL_URL,
     (fbx) => {
       clearTimeout(stallTimeout);
-      mountRobot(fbx);
+      tagAndMaterializeMeshes(fbx);
+      normalizeAndPlace(fbx, 0);
+      registerInstance(fbx);
+      loadingScreen.classList.add('hidden');
     },
     (progress) => {
       if (progress.total) {
@@ -282,12 +382,25 @@ function init() {
     }
   );
 
-  // --- Importar un FBX local (bypasa el fetch del modelo empaquetado,
-  // útil para probar si un modelo distinto/re-exportado carga mejor) --------
+  let flashTimeoutId = null;
+  function flashMessage(text) {
+    clearTimeout(flashTimeoutId);
+    loadingText.textContent = text;
+    loadingScreen.classList.remove('hidden');
+    flashTimeoutId = setTimeout(() => loadingScreen.classList.add('hidden'), 1800);
+  }
+
+  // --- Importar/agregar un FBX local (no reemplaza los existentes) ---------
   const fileInput = document.getElementById('model-file-input');
   fileInput?.addEventListener('change', (event) => {
     const file = event.target.files?.[0];
     if (!file) return;
+
+    if (instances.length >= MAX_INSTANCES) {
+      flashMessage(`Máximo ${MAX_INSTANCES} modelos a la vez (por rendimiento).`);
+      fileInput.value = '';
+      return;
+    }
 
     loadingText.textContent = `Leyendo ${file.name}…`;
     loadingScreen.classList.remove('hidden');
@@ -296,7 +409,8 @@ function init() {
     reader.onload = () => {
       try {
         const fbx = new FBXLoader().parse(reader.result, '');
-        mountRobot(fbx);
+        addModelFromFBX(fbx);
+        loadingScreen.classList.add('hidden');
       } catch (err) {
         console.error('Error al parsear el FBX importado:', err);
         loadingText.textContent = 'No se pudo leer ese archivo como FBX. Revisa la consola.';
@@ -310,14 +424,65 @@ function init() {
     fileInput.value = '';
   });
 
+  // --- Click-to-select (skips clicks that start a gizmo drag) --------------
+  const raycaster = new THREE.Raycaster();
+  const pointerNdc = new THREE.Vector2();
+
+  renderer.domElement.addEventListener('pointerdown', (event) => {
+    if (transformControls.dragging) return;
+    if (event.button !== 0) return;
+
+    const rect = renderer.domElement.getBoundingClientRect();
+    pointerNdc.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+    pointerNdc.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+
+    raycaster.setFromCamera(pointerNdc, camera);
+    const hits = raycaster.intersectObjects(
+      instances.map((inst) => inst.root),
+      true
+    );
+
+    if (hits.length === 0) {
+      deselectInstance();
+      return;
+    }
+
+    let obj = hits[0].object;
+    while (obj && obj.userData.instanceId === undefined) obj = obj.parent;
+    if (obj) selectInstance(instancesById.get(obj.userData.instanceId));
+  });
+
+  window.addEventListener('keydown', (event) => {
+    if (event.target instanceof HTMLInputElement) return;
+    switch (event.key.toLowerCase()) {
+      case 'g':
+        setGizmoMode('translate');
+        break;
+      case 'r':
+        setGizmoMode('rotate');
+        break;
+      case 's':
+        setGizmoMode('scale');
+        break;
+      case 'delete':
+      case 'backspace':
+        if (selected) removeInstance(selected);
+        break;
+      default:
+        break;
+    }
+  });
+
   window.addEventListener('resize', () => onResize(camera, renderer, composer, target));
 
   renderer.setAnimationLoop(() => {
     const delta = state.clock.getDelta();
 
-    if (state.mixer && state.playing) {
-      state.mixer.update(delta * state.timeScale);
+    if (state.playing) {
+      instances.forEach(({ mixer }) => mixer?.update(delta * state.timeScale));
     }
+
+    if (selected) selectionHighlight.setFromObject(selected.root);
 
     controls.update();
     composer.render();
@@ -326,7 +491,7 @@ function init() {
 
 function updateOrthoFrustum(camera, targetY = 0) {
   const aspect = window.innerWidth / window.innerHeight;
-  const viewSize = 7.5;
+  const viewSize = 9;
   camera.left = (-viewSize * aspect) / 2;
   camera.right = (viewSize * aspect) / 2;
   camera.top = viewSize / 2 + targetY * 0.4;
