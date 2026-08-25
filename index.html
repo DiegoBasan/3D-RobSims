@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>RobSims · Brazo Robótico 3D Isométrico</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <canvas id="scene-canvas"></canvas>
+
+      <div id="loading-screen">
+        <div class="loading-inner">
+          <div class="spinner"></div>
+          <p id="loading-text">Cargando modelo 3D…</p>
+        </div>
+      </div>
+
+      <header id="hud-top">
+        <h1>RobSims</h1>
+        <p>Brazo robótico · vista isométrica · PBR + IBL</p>
+      </header>
+
+      <footer id="hud-bottom">
+        <span>Arrastra para orbitar · Scroll para zoom</span>
+      </footer>
+    </div>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

@@ -1,0 +1,19 @@
+{
+  "name": "3d-robsims",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Visor 3D hyperrealista de un brazo robótico industrial (isométrico, PBR + IBL) construido con Three.js y Vite.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "three": "^0.169.0"
+  },
+  "devDependencies": {
+    "lil-gui": "^0.19.2",
+    "vite": "^6.4.3"
+  }
+}
